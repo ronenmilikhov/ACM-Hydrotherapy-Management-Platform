@@ -11,13 +11,13 @@
 </p>
 
 ## 📖 About The Project
-This project is a Capstone Project developed for **"Mayim Shavim"**, an organization empowering children with special needs through hydrotherapy.
+This project is my BSc Final Project developed for **"Mayim Shavim"**, an organization empowering children with special needs through hydrotherapy.
 The goal is to build a comprehensive digital platform to manage volunteers, track treatment progress, and improve communication between therapists and parents.
 
 ## 🛠️ Planned Tech Stack
 * **Mobile App (Volunteers/Parents):** React Native
-* **Backend API:** Node.js (Express)
-* **Database:** Microsoft SQL / MongoDB
+* **Backend API:** C# (ASP.NET)
+* **Database:** Microsoft SQL
 * **AI/ML Integration:** Predictive models for treatment progress and personalized insights.
 
 ## 🧩 Key Features (Planned)
@@ -30,7 +30,7 @@ The goal is to build a comprehensive digital platform to manage volunteers, trac
 - [x] Requirement Analysis
 - [x] UI/UX Design (Figma)
 - [ ] Database Schema Design
-- [ ] Backend Implementation (Node.js)
+- [ ] Backend Implementation (C#)
 - [ ] Mobile App Development (React Native)
 - [ ] AI Model Training
 
