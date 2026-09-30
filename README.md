@@ -153,7 +153,6 @@ ACM-Hydrotherapy-Management-Platform/
 ├── notifications/              # Push notification handlers
 ├── theme/                      # App design tokens & global styles
 ├── ServerSide/                 # .NET 8 Web API and supporting services
-│   ├── BillingKillSwitch/      # Separate billing-alert utility
 │   └── ReactServerSide/        # ASP.NET Core project files, controllers & DAL
 ├── App.js                      # Main App Entry & Navigation container
 ├── apiConfig.js                # API base URL resolver & Auth headers
