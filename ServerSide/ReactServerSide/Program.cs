@@ -4,6 +4,9 @@ using Microsoft.Extensions.FileProviders;
 using Microsoft.IdentityModel.Tokens;
 using ReactServerSide.DAL;
 using System.Text;
+using Amazon;
+using Amazon.CognitoIdentityProvider;
+using Amazon.DynamoDBv2;
 using FirebaseAdmin;
 using Google.Apis.Auth.OAuth2;
 
@@ -58,6 +61,14 @@ builder.Services
         };
     });
 builder.Services.AddAuthorization();
+string awsRegion = builder.Configuration["AWS:Region"]
+    ?? Environment.GetEnvironmentVariable("AWS_REGION")
+    ?? "eu-north-1";
+RegionEndpoint awsRegionEndpoint = RegionEndpoint.GetBySystemName(awsRegion);
+builder.Services.AddSingleton<IAmazonDynamoDB>(_ => new AmazonDynamoDBClient(awsRegionEndpoint));
+builder.Services.AddSingleton<IAmazonCognitoIdentityProvider>(_ => new AmazonCognitoIdentityProviderClient(awsRegionEndpoint));
+builder.Services.AddScoped<IDynamoDbUserRepository, DynamoDbUserRepository>();
+builder.Services.AddScoped<IDynamoDbRelationshipRepository, DynamoDbRelationshipRepository>();
 builder.Services.AddScoped<DBServices>();
 builder.Services.AddHttpClient();
 

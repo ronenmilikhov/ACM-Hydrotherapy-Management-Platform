@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Authorization;
 using ReactServerSide.DAL;
 using System.Globalization;
 using System.Net.Http.Headers;
@@ -24,6 +25,7 @@ namespace ReactServerSide.Controllers
         }
 
         [HttpGet("temp-insert")]
+        [Authorize(Roles = "Manager")]
         public IActionResult TempInsert()
         {
             _db.CreateTempCompletedLessonInvitation(out int instructorId, out int groupId, out string meetingDateStr, out string targetMetric);

@@ -842,13 +842,13 @@ namespace ReactServerSide.Controllers
                 var allChildIds = children.Select(c => c.ChildId).ToList();
                 var allReports = _db.GetChildReportsForChildren(allChildIds);
                 var childReportsMap = allReports.GroupBy(r => r.ChildId).ToDictionary(g => g.Key, g => g.ToList());
-                var groupReportsMap = allReports.Where(r => r.GroupId.HasValue).GroupBy(r => r.GroupId.Value).ToDictionary(g => g.Key, g => g.ToList());
+                var groupReportsMap = allReports.Where(r => r.GroupId.HasValue).GroupBy(r => r.GroupId!.Value).ToDictionary(g => g.Key, g => g.ToList());
                 var instructorReportsMap = allReports.GroupBy(r => r.InstructorId).ToDictionary(g => g.Key, g => g.ToList());
 
                 var allGroups = _db.GetGroupsForManagement(true);
                 var groupsByInstructor = allGroups
                     .Where(g => g.InstructorId.HasValue)
-                    .GroupBy(g => g.InstructorId.Value)
+                    .GroupBy(g => g.InstructorId!.Value)
                     .ToDictionary(g => g.Key, g => g.ToList());
 
                 // Query GroupChildren for active group assignments
@@ -1179,12 +1179,12 @@ Do not mention function names, JSON, database, or API structures in your respons
                 var allChildIds = children.Select(c => c.ChildId).ToList();
                 var allReports = _db.GetChildReportsForChildren(allChildIds);
                 var childReportsMap = allReports.GroupBy(r => r.ChildId).ToDictionary(g => g.Key, g => g.ToList());
-                var groupReportsMap = allReports.Where(r => r.GroupId.HasValue).GroupBy(r => r.GroupId.Value).ToDictionary(g => g.Key, g => g.ToList());
+                var groupReportsMap = allReports.Where(r => r.GroupId.HasValue).GroupBy(r => r.GroupId!.Value).ToDictionary(g => g.Key, g => g.ToList());
                 var instructorReportsMap = allReports.GroupBy(r => r.InstructorId).ToDictionary(g => g.Key, g => g.ToList());
 
                 var groupsByInstructor = groups
                     .Where(g => g.InstructorId.HasValue)
-                    .GroupBy(g => g.InstructorId.Value)
+                    .GroupBy(g => g.InstructorId!.Value)
                     .ToDictionary(g => g.Key, g => g.ToList());
 
                 // Query GroupChildren for active group assignments

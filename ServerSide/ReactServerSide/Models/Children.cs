@@ -3,9 +3,9 @@
     public class Children
     {
         int id;
-        Parent parentid; // Foreign key to Parent
-        string firstname;
-        string lastname;
+        Parent parentid = null!; // Foreign key to Parent
+        string firstname = string.Empty;
+        string lastname = string.Empty;
         DateTime dateofbirth;
         int groupid; // Foreign key to Group
         bool isactive;

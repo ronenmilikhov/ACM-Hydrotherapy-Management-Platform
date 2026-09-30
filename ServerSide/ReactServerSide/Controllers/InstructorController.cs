@@ -189,14 +189,19 @@ namespace ReactServerSide.Controllers
         private readonly DBServices _db;
         private readonly IHttpClientFactory _httpClientFactory;
         private readonly IConfiguration _configuration;
-        private static readonly AmazonDynamoDBClient _dynamo = new AmazonDynamoDBClient(RegionEndpoint.EUNorth1);
+        private readonly IAmazonDynamoDB _dynamo;
         private const string SummaryJobsTable = "AISummaryJobs";
 
-        public InstructorController(DBServices db, IHttpClientFactory httpClientFactory, IConfiguration configuration)
+        public InstructorController(
+            DBServices db,
+            IHttpClientFactory httpClientFactory,
+            IConfiguration configuration,
+            IAmazonDynamoDB dynamo)
         {
             _db = db;
             _httpClientFactory = httpClientFactory;
             _configuration = configuration;
+            _dynamo = dynamo;
         }
 
         [HttpGet("{instructorId:int}/groups")]

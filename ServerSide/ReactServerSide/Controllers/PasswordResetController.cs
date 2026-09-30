@@ -4,12 +4,14 @@ using System.Collections.Generic;
 using System.Security.Cryptography;
 using System.Threading.Tasks;
 using FirebaseAdmin.Auth;
-using Google.Cloud.Firestore;
 using Amazon.DynamoDBv2;
 using Amazon.DynamoDBv2.Model;
 using System.Net.Http;
 using System.Text;
 using System.Text.Json;
+using Amazon;
+using Amazon.CognitoIdentityProvider;
+using Amazon.CognitoIdentityProvider.Model;
 
 namespace ReactServerSide.Controllers
 {
@@ -22,17 +24,21 @@ namespace ReactServerSide.Controllers
         private const int PasswordSaltSizeBytes = 16;
         private const int PasswordKeySizeBytes = 32;
 
-        private readonly AmazonDynamoDBClient _dynamoDbClient;
-        private readonly FirestoreDb _firestoreDb;
+        private readonly IAmazonDynamoDB _dynamoDbClient;
+        private readonly IAmazonCognitoIdentityProvider _cognitoClient;
         private readonly Microsoft.Extensions.Configuration.IConfiguration _configuration;
         private readonly IHttpClientFactory _httpClientFactory;
 
-        public PasswordResetController(Microsoft.Extensions.Configuration.IConfiguration configuration, IHttpClientFactory httpClientFactory)
+        public PasswordResetController(
+            Microsoft.Extensions.Configuration.IConfiguration configuration,
+            IHttpClientFactory httpClientFactory,
+            IAmazonDynamoDB dynamoDbClient,
+            IAmazonCognitoIdentityProvider cognitoClient)
         {
             _configuration = configuration;
             _httpClientFactory = httpClientFactory;
-            _dynamoDbClient = new AmazonDynamoDBClient();
-            _firestoreDb = FirestoreDb.Create();
+            _dynamoDbClient = dynamoDbClient;
+            _cognitoClient = cognitoClient;
         }
 
         [HttpPost("request")]
@@ -49,6 +55,19 @@ namespace ReactServerSide.Controllers
             {
                 try
                 {
+                    string cognitoClientId = (_configuration["AWS:Cognito:AppClientId"] ?? string.Empty).Trim();
+                    if (!string.IsNullOrWhiteSpace(cognitoClientId)
+                        && !cognitoClientId.StartsWith("SET_", StringComparison.OrdinalIgnoreCase))
+                    {
+                        await _cognitoClient.ForgotPasswordAsync(new ForgotPasswordRequest
+                        {
+                            ClientId = cognitoClientId,
+                            Username = email
+                        });
+
+                        return Ok(new { message = "אם האימייל קיים במערכת, אימייל לאיפוס סיסמה נשלח אליו בהצלחה." });
+                    }
+
                     await EnsureFirebaseUserExists(email);
 
                     // Request password reset email from Firebase Auth

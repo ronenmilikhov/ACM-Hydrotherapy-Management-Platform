@@ -975,8 +975,6 @@ namespace ReactServerSide.Controllers
             {
                 return string.Empty;
             }
-
-            return string.Empty;
         }
 
         private static void ApplyFallbackGroupNotes(List<GroupAiStatisticRecord> stats)

@@ -6,6 +6,8 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.Data.SqlClient;
 using Amazon;
+using Amazon.CognitoIdentityProvider;
+using Amazon.CognitoIdentityProvider.Model;
 using Amazon.DynamoDBv2;
 using Amazon.DynamoDBv2.Model;
 using Amazon.DynamoDBv2.DocumentModel;
@@ -17,7 +19,10 @@ namespace ReactServerSide.DAL
     public class DBServices
     {
         private readonly string _connectionString;
-        private readonly AmazonDynamoDBClient _dynamoDbClient;
+        private readonly IAmazonDynamoDB _dynamoDbClient;
+        private readonly IAmazonCognitoIdentityProvider _cognitoClient;
+        private readonly IDynamoDbUserRepository _userRepository;
+        private readonly IDynamoDbRelationshipRepository _relationshipRepository;
         private readonly IConfiguration _configuration;
         private readonly IHttpClientFactory _httpClientFactory;
         private const string PasswordHashPrefix = "pbkdf2";
@@ -74,10 +79,20 @@ namespace ReactServerSide.DAL
             ["persistenceEffort"] = "התמדה ומאמץ"
         };
 
-        public DBServices(IConfiguration configuration, IHttpClientFactory httpClientFactory)
+        public DBServices(
+            IConfiguration configuration,
+            IHttpClientFactory httpClientFactory,
+            IAmazonDynamoDB dynamoDbClient,
+            IAmazonCognitoIdentityProvider cognitoClient,
+            IDynamoDbUserRepository userRepository,
+            IDynamoDbRelationshipRepository relationshipRepository)
         {
             _configuration = configuration;
             _httpClientFactory = httpClientFactory;
+            _dynamoDbClient = dynamoDbClient;
+            _cognitoClient = cognitoClient;
+            _userRepository = userRepository;
+            _relationshipRepository = relationshipRepository;
             _connectionString = configuration.GetConnectionString("myProjDB") ?? string.Empty;
 
             if (string.IsNullOrWhiteSpace(_connectionString))
@@ -85,10 +100,9 @@ namespace ReactServerSide.DAL
                 _connectionString = "Server=(localdb)\\MSSQLLocalDB;Database=master;Trusted_Connection=True;";
             }
 
-            _dynamoDbClient = new AmazonDynamoDBClient(RegionEndpoint.EUNorth1);
         }
 
-        public AmazonDynamoDBClient DynamoDbClient => _dynamoDbClient;
+        public IAmazonDynamoDB DynamoDbClient => _dynamoDbClient;
 
         public SqlConnection OpenConnection()
         {
@@ -129,86 +143,10 @@ namespace ReactServerSide.DAL
 
         private HashSet<int> GetInstructorIdsForChild(int parentId, int childId)
         {
-            var instructorIds = new HashSet<int>();
-
-            // 1. Group path
-            var groupChildrenScan = _dynamoDbClient.ScanAsync(new ScanRequest
-            {
-                TableName = "GroupChildren",
-                FilterExpression = "ChildId = :cid AND IsActive = :active",
-                ExpressionAttributeValues = new Dictionary<string, AttributeValue>
-                {
-                    [":cid"] = new AttributeValue { N = childId.ToString() },
-                    [":active"] = new AttributeValue { BOOL = true }
-                }
-            }).GetAwaiter().GetResult();
-
-            var activeGroupIds = new HashSet<int>();
-            foreach (var item in groupChildrenScan.Items)
-            {
-                activeGroupIds.Add(int.Parse(item["GroupId"].N));
-            }
-
-            if (activeGroupIds.Count > 0)
-            {
-                var groupsScan = _dynamoDbClient.ScanAsync(new ScanRequest { TableName = "Groups" }).GetAwaiter().GetResult();
-                var trulyActiveGroupIds = new HashSet<int>();
-                foreach (var g in groupsScan.Items)
-                {
-                    int gid = int.Parse(g["Id"].N);
-                    bool gActive = g.ContainsKey("IsActive") && g["IsActive"].BOOL == true;
-                    if (gActive && activeGroupIds.Contains(gid))
-                    {
-                        trulyActiveGroupIds.Add(gid);
-                    }
-                }
-
-                if (trulyActiveGroupIds.Count > 0)
-                {
-                    var instructorGroupsScan = _dynamoDbClient.ScanAsync(new ScanRequest
-                    {
-                        TableName = "InstructorGroups",
-                        FilterExpression = "IsActive = :active",
-                        ExpressionAttributeValues = new Dictionary<string, AttributeValue>
-                        {
-                            [":active"] = new AttributeValue { BOOL = true }
-                        }
-                    }).GetAwaiter().GetResult();
-
-                    foreach (var ig in instructorGroupsScan.Items)
-                    {
-                        int gid = int.Parse(ig["GroupId"].N);
-                        int instId = int.Parse(ig["InstructorId"].N);
-                        if (trulyActiveGroupIds.Contains(gid))
-                        {
-                            instructorIds.Add(instId);
-                        }
-                    }
-                }
-            }
-
-            // 2. Private training sessions path
-            var tsScan = _dynamoDbClient.ScanAsync(new ScanRequest
-            {
-                TableName = "TrainingSessions",
-                FilterExpression = "ChildId = :cid AND #stat <> :canc",
-                ExpressionAttributeNames = new Dictionary<string, string>
-                {
-                    ["#stat"] = "Status"
-                },
-                ExpressionAttributeValues = new Dictionary<string, AttributeValue>
-                {
-                    [":cid"] = new AttributeValue { N = childId.ToString() },
-                    [":canc"] = new AttributeValue { S = "Cancelled" }
-                }
-            }).GetAwaiter().GetResult();
-
-            foreach (var ts in tsScan.Items)
-            {
-                instructorIds.Add(int.Parse(ts["InstructorId"].N));
-            }
-
-            return instructorIds;
+            return _relationshipRepository
+                .GetInstructorIdsForChildAsync(parentId, childId)
+                .GetAwaiter()
+                .GetResult();
         }
 
         private static string HashPassword(string password)
@@ -276,35 +214,17 @@ namespace ReactServerSide.DAL
             }
         }
 
-        private void UpgradeInstructorPasswordHash(string email, string rawPassword)
+        private async Task UpgradeInstructorPasswordHash(string email, string rawPassword)
         {
-            var key = new Dictionary<string, AttributeValue> { ["Email"] = new AttributeValue { S = email } };
-            var updates = new Dictionary<string, AttributeValueUpdate>
-            {
-                ["PasswordHash"] = new AttributeValueUpdate
-                {
-                    Action = AttributeAction.PUT,
-                    Value = new AttributeValue { S = HashPassword(rawPassword) }
-                }
-            };
-            _dynamoDbClient.UpdateItemAsync("Instructors", key, updates).GetAwaiter().GetResult();
+            await _userRepository.UpdatePasswordHashAsync("Instructors", email, HashPassword(rawPassword));
         }
 
-        private void UpgradeParentPasswordHash(string email, string rawPassword)
+        private async Task UpgradeParentPasswordHash(string email, string rawPassword)
         {
-            var key = new Dictionary<string, AttributeValue> { ["Email"] = new AttributeValue { S = email } };
-            var updates = new Dictionary<string, AttributeValueUpdate>
-            {
-                ["PasswordHash"] = new AttributeValueUpdate
-                {
-                    Action = AttributeAction.PUT,
-                    Value = new AttributeValue { S = HashPassword(rawPassword) }
-                }
-            };
-            _dynamoDbClient.UpdateItemAsync("Parents", key, updates).GetAwaiter().GetResult();
+            await _userRepository.UpdatePasswordHashAsync("Parents", email, HashPassword(rawPassword));
         }
 
-        private string AuthenticateWithFirebase(string email, string password)
+        private async Task<string> AuthenticateWithFirebase(string email, string password)
         {
             try
             {
@@ -323,13 +243,13 @@ namespace ReactServerSide.DAL
                 var json = JsonSerializer.Serialize(payload);
                 using var content = new StringContent(json, Encoding.UTF8, "application/json");
 
-                using var response = client.PostAsync(url, content).GetAwaiter().GetResult();
+                using var response = await client.PostAsync(url, content);
                 if (response.IsSuccessStatusCode)
                 {
                     return "SUCCESS";
                 }
                 
-                var errorContent = response.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+                var errorContent = await response.Content.ReadAsStringAsync();
                 Console.WriteLine($"[Firebase Auth] SignIn failed for {email}: {response.StatusCode} - {errorContent}");
                 
                 if (!string.IsNullOrEmpty(errorContent))
@@ -359,15 +279,92 @@ namespace ReactServerSide.DAL
             }
         }
 
-        public AuthenticatedUser? PostAuthenticateUser(string email, string password)
+        private async Task<AuthenticatedUser?> TryAuthenticateWithCognito(string email, string password)
+        {
+            string clientId = (_configuration["AWS:Cognito:AppClientId"] ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(clientId) || clientId.StartsWith("SET_", StringComparison.OrdinalIgnoreCase))
+            {
+                return null;
+            }
+
+            try
+            {
+                InitiateAuthResponse response = await _cognitoClient.InitiateAuthAsync(new InitiateAuthRequest
+                {
+                    ClientId = clientId,
+                    AuthFlow = AuthFlowType.USER_PASSWORD_AUTH,
+                    AuthParameters = new Dictionary<string, string>
+                    {
+                        ["USERNAME"] = email,
+                        ["PASSWORD"] = password
+                    }
+                });
+
+                if (response.AuthenticationResult == null || string.IsNullOrWhiteSpace(response.AuthenticationResult.IdToken))
+                {
+                    return null;
+                }
+
+                foreach (string tableName in new[] { "Instructors", "Parents" })
+                {
+                    Dictionary<string, AttributeValue>? item = await _userRepository.GetByEmailAsync(tableName, email);
+                    if (item == null)
+                    {
+                        continue;
+                    }
+                    if (!item.TryGetValue("IsActive", out AttributeValue? active) || active.BOOL != true)
+                    {
+                        return null;
+                    }
+
+                    int id = int.Parse(item["Id"].N ?? "0");
+                    string firstName = item.TryGetValue("FirstName", out AttributeValue? first) ? first.S ?? string.Empty : string.Empty;
+                    string lastName = item.TryGetValue("LastName", out AttributeValue? last) ? last.S ?? string.Empty : string.Empty;
+                    string role = tableName == "Parents"
+                        ? "Parent"
+                        : (item.TryGetValue("Role", out AttributeValue? roleValue) ? roleValue.S ?? "Instructor" : "Instructor");
+
+                    return new AuthenticatedUser
+                    {
+                        Id = id,
+                        Email = email,
+                        Role = role,
+                        UserType = tableName == "Parents" ? "Parent" : "Instructor",
+                        FullName = $"{firstName} {lastName}".Trim()
+                    };
+                }
+            }
+            catch (NotAuthorizedException)
+            {
+                return null;
+            }
+            catch (UserNotFoundException)
+            {
+                return null;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[Cognito Auth] Authentication failed for {email}: {ex.Message}");
+            }
+
+            return null;
+        }
+
+        public async Task<AuthenticatedUser?> PostAuthenticateUser(string email, string password)
         {
             // Clean hidden RLM, zero-width spaces and control chars from email
             email = System.Text.RegularExpressions.Regex.Replace(email, @"[\u200B-\u200D\u200E\u200F\uFEFF]", "").Trim().ToLowerInvariant();
 
+            AuthenticatedUser? cognitoUser = await TryAuthenticateWithCognito(email, password);
+            if (cognitoUser != null)
+            {
+                return cognitoUser;
+            }
+
             bool existsInFirebase = false;
             try
             {
-                var userRecord = FirebaseAuth.DefaultInstance.GetUserByEmailAsync(email).GetAwaiter().GetResult();
+                var userRecord = await FirebaseAuth.DefaultInstance.GetUserByEmailAsync(email);
                 existsInFirebase = true;
             }
             catch (FirebaseAuthException ex) when (ex.AuthErrorCode == AuthErrorCode.UserNotFound)
@@ -383,17 +380,16 @@ namespace ReactServerSide.DAL
             if (existsInFirebase)
             {
                 // User exists in Firebase, so they MUST authenticate via Firebase
-                string fbResult = AuthenticateWithFirebase(email, password);
+                string fbResult = await AuthenticateWithFirebase(email, password);
                 if (fbResult == "SUCCESS")
                 {
                     // Authenticated in Firebase. Load details from DynamoDB.
                     var instructorKey = new Dictionary<string, AttributeValue> { ["Email"] = new AttributeValue { S = email } };
                     try
                     {
-                        var instructorResponse = _dynamoDbClient.GetItemAsync("Instructors", instructorKey).GetAwaiter().GetResult();
-                        if (instructorResponse.Item != null && instructorResponse.Item.Count > 0)
+                        Dictionary<string, AttributeValue>? item = await _userRepository.GetByEmailAsync("Instructors", email);
+                        if (item != null)
                         {
-                            var item = instructorResponse.Item;
                             bool isActive = item.ContainsKey("IsActive") && item["IsActive"].BOOL == true;
                             if (isActive)
                             {
@@ -406,7 +402,7 @@ namespace ReactServerSide.DAL
                                 if (!VerifyPassword(password, storedPassword))
                                 {
                                     // User updated password in Firebase (e.g. via reset link). Sync back to local DB.
-                                    UpgradeInstructorPasswordHash(email, password);
+                                    await UpgradeInstructorPasswordHash(email, password);
                                 }
 
                                 return new AuthenticatedUser
@@ -428,10 +424,9 @@ namespace ReactServerSide.DAL
                     var parentKey = new Dictionary<string, AttributeValue> { ["Email"] = new AttributeValue { S = email } };
                     try
                     {
-                        var parentResponse = _dynamoDbClient.GetItemAsync("Parents", parentKey).GetAwaiter().GetResult();
-                        if (parentResponse.Item != null && parentResponse.Item.Count > 0)
+                        Dictionary<string, AttributeValue>? item = await _userRepository.GetByEmailAsync("Parents", email);
+                        if (item != null)
                         {
-                            var item = parentResponse.Item;
                             bool isActive = item.ContainsKey("IsActive") && item["IsActive"].BOOL == true;
                             if (isActive)
                             {
@@ -443,7 +438,7 @@ namespace ReactServerSide.DAL
                                 if (!VerifyPassword(password, storedPassword))
                                 {
                                     // User updated password in Firebase. Sync back to local DB.
-                                    UpgradeParentPasswordHash(email, password);
+                                    await UpgradeParentPasswordHash(email, password);
                                 }
 
                                 return new AuthenticatedUser
@@ -472,10 +467,9 @@ namespace ReactServerSide.DAL
             var fallbackInstructorKey = new Dictionary<string, AttributeValue> { ["Email"] = new AttributeValue { S = email } };
             try
             {
-                var instructorResponse = _dynamoDbClient.GetItemAsync("Instructors", fallbackInstructorKey).GetAwaiter().GetResult();
-                if (instructorResponse.Item != null && instructorResponse.Item.Count > 0)
+                Dictionary<string, AttributeValue>? item = await _userRepository.GetByEmailAsync("Instructors", email);
+                if (item != null)
                 {
-                    var item = instructorResponse.Item;
                     bool isActive = item.ContainsKey("IsActive") && item["IsActive"].BOOL == true;
                     if (isActive)
                     {
@@ -489,7 +483,7 @@ namespace ReactServerSide.DAL
 
                             if (!IsPasswordHashFormat(storedPassword))
                             {
-                                UpgradeInstructorPasswordHash(email, password);
+                                await UpgradeInstructorPasswordHash(email, password);
                             }
 
                             // Automatically register/migrate user to Firebase Auth
@@ -501,7 +495,7 @@ namespace ReactServerSide.DAL
                                     EmailVerified = true,
                                     Password = password
                                 };
-                                FirebaseAuth.DefaultInstance.CreateUserAsync(args).GetAwaiter().GetResult();
+                                await FirebaseAuth.DefaultInstance.CreateUserAsync(args);
                                 Console.WriteLine($"[Firebase Sync] Migrated instructor {email} to Firebase Auth.");
                             }
                             catch (Exception ex)
@@ -529,10 +523,9 @@ namespace ReactServerSide.DAL
             var fallbackParentKey = new Dictionary<string, AttributeValue> { ["Email"] = new AttributeValue { S = email } };
             try
             {
-                var parentResponse = _dynamoDbClient.GetItemAsync("Parents", fallbackParentKey).GetAwaiter().GetResult();
-                if (parentResponse.Item != null && parentResponse.Item.Count > 0)
+                Dictionary<string, AttributeValue>? item = await _userRepository.GetByEmailAsync("Parents", email);
+                if (item != null)
                 {
-                    var item = parentResponse.Item;
                     bool isActive = item.ContainsKey("IsActive") && item["IsActive"].BOOL == true;
                     if (isActive)
                     {
@@ -545,7 +538,7 @@ namespace ReactServerSide.DAL
 
                             if (!IsPasswordHashFormat(storedPassword))
                             {
-                                UpgradeParentPasswordHash(email, password);
+                                await UpgradeParentPasswordHash(email, password);
                             }
 
                             // Automatically register/migrate user to Firebase Auth
@@ -557,7 +550,7 @@ namespace ReactServerSide.DAL
                                     EmailVerified = true,
                                     Password = password
                                 };
-                                FirebaseAuth.DefaultInstance.CreateUserAsync(args).GetAwaiter().GetResult();
+                                await FirebaseAuth.DefaultInstance.CreateUserAsync(args);
                                 Console.WriteLine($"[Firebase Sync] Migrated parent {email} to Firebase Auth.");
                             }
                             catch (Exception ex)
@@ -585,7 +578,7 @@ namespace ReactServerSide.DAL
             return null;
         }
 
-        public bool PostIsManagerCredentialsValid(string email, string password)
+        public async Task<bool> PostIsManagerCredentialsValid(string email, string password)
         {
             var key = new Dictionary<string, AttributeValue>
             {
@@ -594,7 +587,7 @@ namespace ReactServerSide.DAL
 
             try
             {
-                var response = _dynamoDbClient.GetItemAsync("Instructors", key).GetAwaiter().GetResult();
+                var response = await _dynamoDbClient.GetItemAsync("Instructors", key);
                 if (response.Item != null && response.Item.Count > 0)
                 {
                     var item = response.Item;
@@ -608,7 +601,7 @@ namespace ReactServerSide.DAL
                         {
                             if (!IsPasswordHashFormat(storedPassword))
                             {
-                                UpgradeInstructorPasswordHash(email, password);
+                                await UpgradeInstructorPasswordHash(email, password);
                             }
                             return true;
                         }
@@ -1265,7 +1258,7 @@ namespace ReactServerSide.DAL
             {
                 if (instructorsById.TryGetValue(relation.InstructorId, out var instructor))
                 {
-                    if (groupsMap.TryGetValue(relation.GroupId, out string groupName))
+                    if (groupsMap.TryGetValue(relation.GroupId, out string? groupName))
                     {
                         if (!string.IsNullOrWhiteSpace(groupName))
                         {
@@ -2406,24 +2399,24 @@ namespace ReactServerSide.DAL
                 string firstName = item.ContainsKey("FirstName") ? item["FirstName"].S : "";
                 string lastName = item.ContainsKey("LastName") ? item["LastName"].S : "";
 
-                string parentEmail = "";
-                string parentFirstName = "";
-                string parentLastName = "";
+                string parentEmail = string.Empty;
+                string parentFirstName = string.Empty;
+                string parentLastName = string.Empty;
                 if (parentsMap.TryGetValue(parentId, out var parentItem))
                 {
-                    parentEmail = parentItem.ContainsKey("Email") ? parentItem["Email"].S : "";
-                    parentFirstName = parentItem.ContainsKey("FirstName") ? parentItem["FirstName"].S : "";
-                    parentLastName = parentItem.ContainsKey("LastName") ? parentItem["LastName"].S : "";
+                    parentEmail = parentItem.ContainsKey("Email") ? parentItem["Email"].S ?? string.Empty : string.Empty;
+                    parentFirstName = parentItem.ContainsKey("FirstName") ? parentItem["FirstName"].S ?? string.Empty : string.Empty;
+                    parentLastName = parentItem.ContainsKey("LastName") ? parentItem["LastName"].S ?? string.Empty : string.Empty;
                 }
 
                 int? activeGroupId = null;
-                string activeGroupName = null;
+                string activeGroupName = string.Empty;
                 if (activeGroupMap.TryGetValue(childId, out int gId))
                 {
                     activeGroupId = gId;
                     if (groupsMap.TryGetValue(gId, out var groupItem))
                     {
-                        activeGroupName = groupItem.ContainsKey("Name") ? groupItem["Name"].S : "";
+                        activeGroupName = groupItem.ContainsKey("Name") ? groupItem["Name"].S ?? string.Empty : string.Empty;
                     }
                 }
 
@@ -3285,13 +3278,14 @@ namespace ReactServerSide.DAL
                     childId = cid;
                 }
 
-                string childFullName = "";
+                string childFullName = string.Empty;
                 if (childId.HasValue)
                 {
-                    childrenMap.TryGetValue(childId.Value, out childFullName);
+                    childrenMap.TryGetValue(childId.Value, out string? resolvedChildFullName);
+                    childFullName = resolvedChildFullName ?? string.Empty;
                 }
 
-                instructorsMap.TryGetValue(instructorId, out string instructorFullName);
+                instructorsMap.TryGetValue(instructorId, out string? instructorFullName);
 
                 rows.Add(new ManagerAttendanceReportRowRecord
                 {
@@ -3305,9 +3299,9 @@ namespace ReactServerSide.DAL
                     ChildId = childId,
                     ChildFullName = childFullName,
                     InstructorId = instructorId,
-                    InstructorFullName = instructorFullName,
+                    InstructorFullName = instructorFullName ?? string.Empty,
                     GroupId = null,
-                    GroupName = null
+                    GroupName = string.Empty
                 });
             }
 
@@ -3338,13 +3332,14 @@ namespace ReactServerSide.DAL
                     groupId = gid;
                 }
 
-                string groupName = "";
+                string groupName = string.Empty;
                 if (groupId.HasValue)
                 {
-                    groupsMap.TryGetValue(groupId.Value, out groupName);
+                    groupsMap.TryGetValue(groupId.Value, out string? resolvedGroupName);
+                    groupName = resolvedGroupName ?? string.Empty;
                 }
 
-                instructorsMap.TryGetValue(instructorId, out string instructorFullName);
+                instructorsMap.TryGetValue(instructorId, out string? instructorFullName);
 
                 rows.Add(new ManagerAttendanceReportRowRecord
                 {
@@ -3356,9 +3351,9 @@ namespace ReactServerSide.DAL
                     Status = status,
                     AttendanceCategory = MapAttendanceCategory(status),
                     ChildId = null,
-                    ChildFullName = null,
+                    ChildFullName = string.Empty,
                     InstructorId = instructorId,
-                    InstructorFullName = instructorFullName,
+                    InstructorFullName = instructorFullName ?? string.Empty,
                     GroupId = groupId,
                     GroupName = groupName
                 });
@@ -4835,7 +4830,7 @@ namespace ReactServerSide.DAL
                     string childLastName = childItem.ContainsKey("LastName") ? childItem["LastName"].S : "";
                     string childFullName = $"{childFirstName} {childLastName}".Trim();
 
-                    instructorsMap.TryGetValue(instructorId, out string instructorFullName);
+                    instructorsMap.TryGetValue(instructorId, out string? instructorFullName);
 
                     lessons.Add(new ParentScheduledLessonRecord
                     {
@@ -4846,7 +4841,7 @@ namespace ReactServerSide.DAL
                         InstructorId = instructorId,
                         InstructorFullName = instructorFullName ?? "",
                         GroupId = null,
-                        GroupName = null,
+                        GroupName = string.Empty,
                         MeetingDate = meetingDate.Date,
                         StartTime = startTime,
                         EndTime = endTime,
@@ -4921,7 +4916,7 @@ namespace ReactServerSide.DAL
             foreach (var item in gtsScan.Items)
             {
                 int groupId = int.Parse(item["GroupId"].N);
-                if (groupsMap.TryGetValue(groupId, out string groupName))
+                if (groupsMap.TryGetValue(groupId, out string? groupName))
                 {
                     if (groupChildrenLookup.TryGetValue(groupId, out var childIds))
                     {
@@ -4941,7 +4936,7 @@ namespace ReactServerSide.DAL
                                 string childLastName = childItem.ContainsKey("LastName") ? childItem["LastName"].S : "";
                                 string childFullName = $"{childFirstName} {childLastName}".Trim();
 
-                                instructorsMap.TryGetValue(instructorId, out string instructorFullName);
+                                instructorsMap.TryGetValue(instructorId, out string? instructorFullName);
 
                                 string targetMetric = "";
                                 if (item.ContainsKey("TargetMetric") && item["TargetMetric"].S != null)
@@ -4951,7 +4946,8 @@ namespace ReactServerSide.DAL
                                 else
                                 {
                                     string key = $"{groupId}_{item["MeetingDate"].S}";
-                                    groupInvitationTargetMetric.TryGetValue(key, out targetMetric);
+                                    groupInvitationTargetMetric.TryGetValue(key, out string? resolvedTargetMetric);
+                                    targetMetric = resolvedTargetMetric ?? string.Empty;
                                 }
 
                                 lessons.Add(new ParentScheduledLessonRecord
@@ -5023,7 +5019,7 @@ namespace ReactServerSide.DAL
                         }
                     }
 
-                    string groupName = null;
+                    string? groupName = null;
                     if (groupId.HasValue)
                     {
                         groupsMap.TryGetValue(groupId.Value, out groupName);
@@ -5050,7 +5046,7 @@ namespace ReactServerSide.DAL
                             string childLastName = childItem.ContainsKey("LastName") ? childItem["LastName"].S : "";
                             string childFullName = $"{childFirstName} {childLastName}".Trim();
 
-                            instructorsMap.TryGetValue(instructorId, out string instructorFullName);
+                            instructorsMap.TryGetValue(instructorId, out string? instructorFullName);
 
                             lessons.Add(new ParentScheduledLessonRecord
                             {
@@ -5061,7 +5057,7 @@ namespace ReactServerSide.DAL
                                 InstructorId = instructorId,
                                 InstructorFullName = instructorFullName ?? "",
                                 GroupId = groupId,
-                                GroupName = groupName,
+                                GroupName = groupName ?? string.Empty,
                                 MeetingDate = meetingDate.Date,
                                 StartTime = startTime,
                                 EndTime = endTime,
@@ -6834,7 +6830,7 @@ namespace ReactServerSide.DAL
                 int childId = int.Parse(lir["ChildId"].N);
                 int recipientId = int.Parse(lir["RecipientId"].N);
 
-                childrenMap.TryGetValue(childId, out string childFullName);
+                childrenMap.TryGetValue(childId, out string? childFullName);
                 string normalizedChildNameForNotification = string.IsNullOrWhiteSpace(childFullName)
                     ? "הילד/ה"
                     : childFullName.Trim();
@@ -7162,7 +7158,7 @@ namespace ReactServerSide.DAL
                 int childId = int.Parse(lir["ChildId"].N);
                 int recipientId = int.Parse(lir["RecipientId"].N);
 
-                childrenMap.TryGetValue(childId, out string childFullName);
+                childrenMap.TryGetValue(childId, out string? childFullName);
                 string normalizedChildNameForNotification = string.IsNullOrWhiteSpace(childFullName)
                     ? "הילד/ה"
                     : childFullName.Trim();

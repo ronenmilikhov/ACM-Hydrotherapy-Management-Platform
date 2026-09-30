@@ -53,7 +53,10 @@
           }
         }
       ],
-      "expo-font"
+      "expo-font",
+      "@react-native-community/datetimepicker",
+      "expo-sharing",
+      "expo-status-bar"
     ],
     "runtimeVersion": {
       "policy": "appVersion"

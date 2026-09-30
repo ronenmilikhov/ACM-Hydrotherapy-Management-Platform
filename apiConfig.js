@@ -4,8 +4,8 @@ const resolveApiBaseUrl = () => {
   const explicitBaseUrl = normalizeUrl(process.env.EXPO_PUBLIC_API_BASE_URL);
   if (explicitBaseUrl) return explicitBaseUrl;
 
-  // Fallback directly to the Google Cloud Run API URL if environment variable is not defined
-  return 'https://acm-api-service-ra3ceefohq-uc.a.run.app/api';
+  // Replace this placeholder with the deployed AWS API URL, or set the Expo variable.
+  return 'https://your-elastic-beanstalk-environment.example.com/api';
 };
 
 export const API_BASE_URL = resolveApiBaseUrl();

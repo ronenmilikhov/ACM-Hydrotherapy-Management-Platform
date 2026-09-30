@@ -1,15 +1,18 @@
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Authorization;
 using ReactServerSide.DAL;
 using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
+using Amazon.DynamoDBv2;
 using Amazon.DynamoDBv2.Model;
 
 namespace ReactServerSide.Controllers
 {
     [Route("api/[controller]")]
     [ApiController]
+    [Authorize(Roles = "Manager")]
     public class DbMigrationController : ControllerBase
     {
         private readonly DBServices _db;
@@ -27,7 +30,7 @@ namespace ReactServerSide.Controllers
         }
 
         [HttpPost("reset-and-seed-demo")]
-        public async System.Threading.Tasks.Task<IActionResult> ResetAndSeedDemo()
+        public IActionResult ResetAndSeedDemo()
         {
             var log = new List<string>();
 
